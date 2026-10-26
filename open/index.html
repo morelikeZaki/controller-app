@@ -1,0 +1,126 @@
+<!doctype html>
+<!-- Controller's permanent link. The PC's tunnel address changes when it restarts; this page reads the newest one
+     the PC posted on a public ntfy topic, checks the PC signed it (it holds only the public key), checks the PC
+     answers, then goes there. Built by tools/web_page.py; ctl-web-6ff5d8883422934ef2f5d6f4 and BH7OsFv5z4Hp2jmBUjhOgR5ZFH3xpip-u0_DSTB05nXuBcjOGzon2WWl7sMmRY3PRGR642zoZGKqK4kC9ymESGA are filled in there. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://ntfy.sh https://*.trycloudflare.com; img-src data:">
+<title>Controller</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181a'/%3E%3Crect x='10' y='7' width='12' height='18' rx='3' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Ccircle cx='16' cy='20' r='2' fill='%23ff5a36'/%3E%3C/svg%3E">
+<style>
+  :root { color-scheme: dark; --ground: #000; --raised: #18181a; --text: #f4f4f5; --muted: #b4b4b8; --faint: #8e8e94;
+    --tally: #ff5a36; --line: #36363a; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: radial-gradient(60% 50% at 50% 0%, #121214 0%, var(--ground) 70%) var(--ground); color: var(--text);
+    font: 15px/22px "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif; display: grid; place-items: center; padding: 24px 16px; }
+  main { width: min(400px, 100%); animation: rise .32s cubic-bezier(.23, 1, .32, 1); }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; margin-bottom: 28px; }
+  .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--raised); display: grid; place-items: center; }
+  .mark circle { animation: glow 2.4s ease-in-out infinite; }
+  h1 { margin: 0 0 6px; font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -.01em; }
+  p { margin: 0; color: var(--muted); }
+  .state { display: flex; align-items: center; gap: 10px; margin-top: 22px; color: var(--faint); font-size: 13px; }
+  .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--text); animation: spin .8s linear infinite; }
+  .off .spin { animation: none; border-color: var(--tally); }
+  button { margin-top: 20px; height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--text); background: var(--text);
+    color: #000; font: inherit; font-weight: 500; cursor: pointer; }
+  button:hover { background: #fff; }
+  button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes glow { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { main, .mark circle { animation: none; } .spin { animation-duration: 2.4s; } }
+</style>
+</head>
+<body>
+<main id="box" aria-live="polite">
+  <div class="brand"><span class="mark" aria-hidden="true"><svg width="14" height="18" viewBox="0 0 14 18" fill="none"><rect x="1" y="1" width="12" height="16" rx="3" stroke="#fff" stroke-width="1.8"/><circle cx="7" cy="12.5" r="1.8" fill="#ff5a36"/></svg></span>Controller</div>
+  <h1 id="title">Opening Controller</h1>
+  <p id="text">Finding the PC it runs on.</p>
+  <div class="state"><span class="spin" aria-hidden="true"></span><span id="state">Looking it up…</span></div>
+  <button id="again" type="button" hidden>Try again</button>
+</main>
+<script>
+"use strict";
+const TOPIC = "ctl-web-6ff5d8883422934ef2f5d6f4";
+const KEY = "BH7OsFv5z4Hp2jmBUjhOgR5ZFH3xpip-u0_DSTB05nXuBcjOGzon2WWl7sMmRY3PRGR642zoZGKqK4kC9ymESGA";
+const ADDRESS = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
+const $ = (id) => document.getElementById(id);
+let timer = 0;
+
+function bytes(b64u) {
+  const s = b64u.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(s + "=".repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
+}
+
+function show(title, text, state, off) {
+  $("title").textContent = title;
+  $("text").textContent = text;
+  $("state").textContent = state;
+  $("box").classList.toggle("off", !!off);
+  $("again").hidden = !off;
+}
+
+// The newest address the PC signed in the last 12 hours (the PC re-posts it every 4).
+async function newest() {
+  const key = await crypto.subtle.importKey("raw", bytes(KEY), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+  const r = await fetch(`https://ntfy.sh/${TOPIC}/json?poll=1&since=12h`, { cache: "no-store" });
+  let best = null;
+  for (const line of (await r.text()).split("\n").filter(Boolean)) {
+    try {
+      const m = JSON.parse(JSON.parse(line).message);
+      if (!ADDRESS.test(m.u) || !Number.isFinite(m.t) || (best && m.t <= best.t)) continue;
+      const ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, bytes(m.s),
+        new TextEncoder().encode(`${m.u}|${m.t}`));
+      if (ok) best = m;
+    } catch { /* not a message from the PC */ }
+  }
+  return best;
+}
+
+async function answers(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const r = await fetch(`${url}/api/ping`, { cache: "no-store", signal: ctl.signal });
+    return (await r.json()).app === "controller";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function go() {
+  clearTimeout(timer);
+  show("Opening Controller", "Finding the PC it runs on.", "Looking it up…");
+  if (!window.crypto || !crypto.subtle) {
+    show("This browser is too old", "Open this link in an up-to-date Chrome, Edge, Firefox or Safari.", "Can't check the address safely here.", true);
+    return;
+  }
+  try {
+    const m = await newest();
+    if (m) {
+      show("Opening Controller", "Found it. Checking it answers.", "Connecting…");
+      if (await answers(m.u)) {
+        show("Opening Controller", "Taking you there now.", "Connected");
+        location.replace(`${m.u}/`);
+        return;
+      }
+    }
+  } catch { /* offline, or ntfy is down: same message */ }
+  show("Controller isn't reachable", "The PC it runs on is off, restarting or offline. This page keeps checking by itself.",
+    "Trying again in a moment…", true);
+  timer = setTimeout(go, 20000);
+}
+
+$("again").addEventListener("click", go);
+go();
+</script>
+</body>
+</html>
