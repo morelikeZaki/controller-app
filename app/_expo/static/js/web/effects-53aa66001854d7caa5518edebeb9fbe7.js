@@ -1,0 +1,1 @@
+__d(function(g,r,i,a,m,e,d){"use strict";Object.defineProperty(e,'__esModule',{value:!0}),e.afterSync=async function(s,y){try{await(0,c.scheduleReminders)(s)}catch{}if(!y.firstSync&&(0,n.get)().prefs.notifyActivity)try{await(0,c.presentEvents)(s.events)}catch{}try{await(0,t.autoDownload)(s)}catch{}};var t=r(d[0]),c=r(d[1]),n=r(d[2])},950,[798,848,791]);
