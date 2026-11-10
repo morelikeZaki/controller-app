@@ -1,0 +1,123 @@
+<!doctype html>
+<!-- Permanent link to the kouki bridge. The PC's tunnel address changes when it restarts; this page reads the newest one
+     the PC posted on a public ntfy topic, checks the PC signed it (it holds only the public key), checks the PC answers,
+     then goes there. Built by bridge/ctl.py publish-link; kb-68a06ecaf98f972f8677c01e and BE_NkF5D6qCW5eiuS07GoOXCdPz-c-NnR_vVFG5GXByx_dpA9hQShDvKwYkE6GYENdCjsfE3ScS3mr17aXeIlYA are filled in there. -->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://ntfy.sh https://*.trycloudflare.com; img-src data:">
+<meta name="theme-color" content="#f4f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161615" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Claude">
+<title>Claude</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231f6b58'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='17' font-weight='700' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#f4f3ee;--surface:#fff;--ink:#1c1c1a;--muted:#6d6c66;--line:#e3e1d9;--accent:#1f6b58;--accent-ink:#fff;--danger:#b42318;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--surface:#21211f;--ink:#ecebe5;--muted:#9c9b94;--line:#33322f;--accent:#3fae8f;--accent-ink:#0c1f19;--danger:#f0786b;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:grid;place-items:center;padding:24px}
+main{width:100%;max-width:380px;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:28px 22px 24px;box-shadow:0 10px 30px rgba(0,0,0,.06)}
+.av{width:48px;height:48px;border-radius:14px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-weight:700;font-size:20px;margin-bottom:16px}
+h1{font-size:22px;line-height:1.25;margin:0 0 6px;letter-spacing:-.01em}
+p{margin:0;color:var(--muted);font-size:15px}
+.state{display:flex;align-items:center;gap:10px;margin-top:20px;color:var(--muted);font-size:13.5px}
+.spin{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
+.off .spin{animation:none;border-color:var(--danger)}
+button{margin-top:18px;width:100%;padding:13px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer}
+[hidden]{display:none!important}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+</style>
+</head>
+<body>
+<main id="box" aria-live="polite">
+  <div class="av" aria-hidden="true">C</div>
+  <h1 id="title">Ouverture…</h1>
+  <p id="text">Recherche de l’ordinateur.</p>
+  <div class="state"><span class="spin" aria-hidden="true"></span><span id="state">Recherche…</span></div>
+  <button id="again" type="button" hidden>Réessayer</button>
+</main>
+<script>
+"use strict";
+const TOPIC = "kb-68a06ecaf98f972f8677c01e";
+const KEY = "BE_NkF5D6qCW5eiuS07GoOXCdPz-c-NnR_vVFG5GXByx_dpA9hQShDvKwYkE6GYENdCjsfE3ScS3mr17aXeIlYA";
+const ADDRESS = /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/;
+const $ = (id) => document.getElementById(id);
+let timer = 0;
+
+function bytes(b64u) {
+  const s = b64u.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(s + "=".repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
+}
+
+function show(title, text, state, off) {
+  $("title").textContent = title;
+  $("text").textContent = text;
+  $("state").textContent = state;
+  $("box").classList.toggle("off", !!off);
+  $("again").hidden = !off;
+}
+
+// The newest address the PC signed in the last 12 hours (it re-posts it every 4).
+async function newest() {
+  const key = await crypto.subtle.importKey("raw", bytes(KEY), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+  const r = await fetch(`https://ntfy.sh/${TOPIC}/json?poll=1&since=12h`, { cache: "no-store" });
+  let best = null;
+  for (const line of (await r.text()).split("\n").filter(Boolean)) {
+    try {
+      const m = JSON.parse(JSON.parse(line).message);
+      if (!ADDRESS.test(m.u) || !Number.isFinite(m.t) || (best && m.t <= best.t)) continue;
+      const ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, bytes(m.s),
+        new TextEncoder().encode(`${m.u}|${m.t}`));
+      if (ok) best = m;
+    } catch { /* not a message from the PC */ }
+  }
+  return best;
+}
+
+async function answers(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const r = await fetch(`${url}/api/ping`, { cache: "no-store", signal: ctl.signal });
+    return (await r.json()).app === "kouki-bridge";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function go() {
+  clearTimeout(timer);
+  show("Ouverture…", "Recherche de l’ordinateur.", "Recherche…");
+  if (!window.crypto || !crypto.subtle) {
+    show("Navigateur trop ancien", "Ouvrez ce lien dans un Chrome, Safari, Firefox ou Edge à jour.", "Vérification impossible ici.", true);
+    return;
+  }
+  try {
+    const m = await newest();
+    if (m) {
+      show("Ouverture…", "Ordinateur trouvé. Connexion en cours.", "Connexion…");
+      if (await answers(m.u)) {
+        show("Ouverture…", "C’est prêt.", "Connecté");
+        location.replace(`${m.u}/`);
+        return;
+      }
+    }
+  } catch { /* offline, or ntfy is down: same message */ }
+  show("Indisponible pour le moment", "L’ordinateur est éteint, redémarre ou n’a pas internet. Cette page réessaie toute seule.",
+    "Nouvel essai dans un instant…", true);
+  timer = setTimeout(go, 20000);
+}
+
+$("again").addEventListener("click", go);
+go();
+</script>
+</body>
+</html>
